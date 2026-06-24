@@ -279,14 +279,12 @@ def text_width(draw, text, font):
 
 
 def send_rebalance_report(text, image_path):
-    if not userConfig.feishu_sender_dir:
-        raise EnvironmentError("userConfig.feishu_sender_dir is required when send_rebalance_report=True")
-    sys.path.insert(0, userConfig.feishu_sender_dir)
     from feishu_sender import send_feishu
 
+    account = userConfig.account
     send_feishu(
         "Rebalance report image attached.",
-        title="AITA Rebalance Report",
+        title=f"{account} Rebalance Report",
         image_paths=[str(image_path)],
         mode="text",
     )
