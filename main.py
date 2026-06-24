@@ -3,6 +3,9 @@ import math
 import time
 from pathlib import Path
 
+import pandas as pd
+import pandas_market_calendars as mcal
+
 import userConfig
 from ib_interaction import (
     IBConnectionPool,
@@ -18,11 +21,19 @@ from ib_interaction import (
 from rebalance_report import format_rebalance_report, save_rebalance_report_image, send_rebalance_report
 
 
+NYSE = mcal.get_calendar("NYSE")
+
+
+def is_trading_day(timestamp: pd.Timestamp) -> bool:
+    schedule = NYSE.schedule(start_date=timestamp, end_date=timestamp)
+    return len(schedule) > 0
+
+
 def load_latest_order_file():
-    json_files = sorted(Path(".").glob("*.json"), key=lambda path: path.stat().st_mtime)
-    if len(json_files) == 0:
-        raise FileNotFoundError("No json files found in current directory")
-    path = json_files[-1]
+    file_name = f"{userConfig.order_date.strftime('%Y%m%d')}.json"
+    path = Path("target") / file_name
+    if not path.exists():
+        raise FileNotFoundError(f"{path} not found")
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
     if "target_weight" not in data:
@@ -86,6 +97,11 @@ def place_order(ib, contract, action, quantity, reference_price, account, order_
 
 
 def main():
+    order_date = userConfig.order_date
+    if not is_trading_day(pd.Timestamp(order_date)):
+        print(f"{order_date} is not a NYSE trading day, skip", flush=True)
+        return
+
     order_file, order_data = load_latest_order_file()
     account = userConfig.account
     target_weight = order_data["target_weight"]

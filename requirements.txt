@@ -1,2 +1,4 @@
 ib_async
+pandas
+pandas_market_calendars
 Pillow
