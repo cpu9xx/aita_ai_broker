@@ -8,6 +8,34 @@ from pathlib import Path
 from ib_async import IB, OrderStatus, StartupFetch, Stock, LimitOrder, MarketOrder
 
 
+def kill_process_on_port(port):
+    import os
+    try:
+        result = subprocess.run(
+            ["netstat", "-ano"],
+            capture_output=True, timeout=10,
+        )
+        output = result.stdout.decode("gbk", errors="replace")
+        for line in output.splitlines():
+            if f":{port}" in line and "LISTENING" in line:
+                parts = line.split()
+                pid = parts[-1]
+                r = subprocess.run(["taskkill", "/PID", pid, "/F"], capture_output=True, timeout=10)
+                if r.returncode != 0:
+                    r2 = subprocess.run(
+                        ["powershell", "-Command", f"Stop-Process -Id {pid} -Force"],
+                        capture_output=True, timeout=10,
+                    )
+                    if r2.returncode != 0:
+                        print(f"kill_process_on_port: taskkill and powershell both failed for PID {pid}", flush=True)
+                        return False
+                print(f"Killed stale process PID {pid} on port {port}", flush=True)
+                return True
+    except Exception as e:
+        print(f"kill_process_on_port failed: {e}", flush=True)
+    return False
+
+
 class IBConnectionPool:
     def __init__(
         self,
@@ -64,42 +92,65 @@ class IBConnectionPool:
         raise TimeoutError("Getting available clientId timed out")
 
     def get_ib(self):
-        if self.gateway_bat is not None:
-            ensure_gateway_online(
-                host=self.host,
-                port=self.port,
-                gateway_bat=self.gateway_bat,
-                wait_seconds=self.gateway_wait_seconds,
-                poll_seconds=self.gateway_poll_seconds,
-                launcher_env=self.launcher_env,
-            )
-
-        client_id = self.get_client_id()
-        ib = IB()
-
-        print(f"Connecting IB {self.host}:{self.port} clientId={client_id}", flush=True)
-        for _ in range(self.connect_attempts):
-            try:
-                ib.connect(
-                    self.host,
-                    self.port,
-                    clientId=client_id,
-                    timeout=self.connect_timeout,
-                    fetchFields=StartupFetch(0),
+        for attempt in range(2):
+            if self.gateway_bat is not None:
+                ensure_gateway_online(
+                    host=self.host,
+                    port=self.port,
+                    gateway_bat=self.gateway_bat,
+                    wait_seconds=self.gateway_wait_seconds,
+                    poll_seconds=self.gateway_poll_seconds,
+                    launcher_env=self.launcher_env,
                 )
-                ib.sleep(2)
-            except Exception as e:
-                print(f"clientId {client_id} connect failed: {e}", flush=True)
 
-            if ib.isConnected():
-                self.connected_ibs.append(ib)
-                if self.delayed_data:
-                    ib.reqMarketDataType(3)
-                print(f"IB connected clientId={client_id}", flush=True)
-                return ib
+            client_id = self.get_client_id()
+            ib = IB()
 
-            print("waiting IB connected...", flush=True)
-            time.sleep(0.7 + random.uniform(0.5, 1))
+            print(f"Connecting IB {self.host}:{self.port} clientId={client_id}", flush=True)
+            for _ in range(self.connect_attempts):
+                try:
+                    ib.connect(
+                        self.host,
+                        self.port,
+                        clientId=client_id,
+                        timeout=self.connect_timeout,
+                        fetchFields=StartupFetch(0),
+                    )
+                    ib.sleep(2)
+                except Exception as e:
+                    print(f"clientId {client_id} connect failed: {e}", flush=True)
+
+                if ib.isConnected():
+                    self.connected_ibs.append(ib)
+                    if self.delayed_data:
+                        ib.reqMarketDataType(3)
+
+                    # Health check: explicitly request account summary, wait 10s
+                    ib.reqAccountSummary()
+                    healthy = False
+                    for _ in range(10):
+                        if list(ib.accountSummary()):
+                            healthy = True
+                            break
+                        ib.sleep(1)
+
+                    if healthy:
+                        print(f"IB connected clientId={client_id}", flush=True)
+                        return ib
+
+                    # Stale gateway — kill and restart
+                    print("IB health check failed (no accountSummary), killing stale process", flush=True)
+                    try:
+                        ib.disconnect()
+                    except Exception:
+                        pass
+                    self.used_client_ids.discard(client_id)
+                    kill_process_on_port(self.port)
+                    time.sleep(3)
+                    break
+
+                print("waiting IB connected...", flush=True)
+                time.sleep(0.7 + random.uniform(0.5, 1))
 
         raise TimeoutError("Connecting to IB timed out")
 

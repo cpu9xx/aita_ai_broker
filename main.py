@@ -18,6 +18,7 @@ from ib_interaction import (
     place_open_market_order,
     require_managed_account,
 )
+from pnl_history import generate_benchmark_chart, record_today, today_pnl
 from rebalance_report import format_rebalance_report, save_rebalance_report_image, send_rebalance_report
 
 
@@ -66,7 +67,7 @@ def wait_order_accepted(ib, trade, timeout_seconds=60):
     while time.monotonic() < deadline:
         if trade.orderStatus.status in accepted_states:
             return trade.orderStatus.status
-        ib.sleep(1)
+        ib.sleep(3)
     return trade.orderStatus.status
 
 
@@ -125,7 +126,7 @@ def main():
             "TRADING_MODE": userConfig.trading_mode,
         },
     ).get_ib()
-    ib.sleep(1)
+    ib.sleep(2)
     require_managed_account(ib, account)
 
     if userConfig.cancel_existing_orders:
@@ -176,6 +177,8 @@ def main():
     usd_hkd_rate = None
     if ("NetLiquidation", "USD") in account_values:
         net_liq_usd = float(account_values[("NetLiquidation", "USD")])
+        raw_liq = net_liq_usd
+        raw_currency = "USD"
     elif ("NetLiquidation", "HKD") in account_values:
         net_liq_hkd = float(account_values[("NetLiquidation", "HKD")])
         if ("ExchangeRate", "USD") in account_values:
@@ -183,8 +186,12 @@ def main():
         else:
             usd_hkd_rate = userConfig.usd_hkd_rate_fallback
         net_liq_usd = net_liq_hkd / usd_hkd_rate
+        raw_liq = net_liq_hkd
+        raw_currency = "HKD"
     elif ("NetLiquidationByCurrency", "BASE") in account_values and account_values.get(("BaseCurrency", "")) == "USD":
         net_liq_usd = float(account_values[("NetLiquidationByCurrency", "BASE")])
+        raw_liq = net_liq_usd
+        raw_currency = "USD"
     else:
         available = [
             f"{tag} {currency}={value}"
@@ -276,6 +283,16 @@ def main():
     if usd_hkd_rate is not None:
         account_state["USDHKD"] = f"{usd_hkd_rate:.7f}"
 
+    record_today(account, raw_liq, raw_currency)
+    abs_pnl, pct_pnl = today_pnl(account, net_liq_usd)
+    if abs_pnl is not None:
+        account_state["Daily PnL"] = f"{abs_pnl:+.2f} USD ({pct_pnl:+.2f}%)"
+        print(f"daily_pnl: {abs_pnl:+.2f} USD ({pct_pnl:+.2f}%)", flush=True)
+
+    chart_path = generate_benchmark_chart(account, net_liq_usd, ib)
+    if chart_path:
+        print(f"pnl_chart: {chart_path}", flush=True)
+
     report_text = format_rebalance_report(
         order_file=order_file,
         account=account,
@@ -297,7 +314,7 @@ def main():
     print(f"report_image: {report_image}", flush=True)
 
     if userConfig.send_rebalance_report:
-        send_rebalance_report(report_text, report_image)
+        send_rebalance_report(report_text, report_image, chart_path)
 
     ib.disconnect()
 

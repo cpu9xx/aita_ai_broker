@@ -278,14 +278,18 @@ def text_width(draw, text, font):
     return bbox[2] - bbox[0]
 
 
-def send_rebalance_report(text, image_path):
+def send_rebalance_report(text, image_path, chart_path=None):
     from feishu_sender import send_feishu
 
     account = userConfig.account
+    image_paths = [str(image_path)]
+    if chart_path:
+        image_paths.append(str(chart_path))
+
     send_feishu(
         "Rebalance report image attached.",
         title=f"{account} Rebalance Report",
-        image_paths=[str(image_path)],
+        image_paths=image_paths,
         mode="text",
     )
 

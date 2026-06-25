@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
+pnl/
 reports/
+.workbuddy/
 .env
 userConfig.py
