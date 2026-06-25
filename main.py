@@ -61,6 +61,20 @@ def get_market_price(ib, contract):
     raise TimeoutError(f"Market data timed out for {contract}")
 
 
+def get_close_price(ib, contract):
+    """Get previous close price — stable, not affected by pre-market fluctuation."""
+    ticker = ib.reqMktData(contract, snapshot=False)
+    deadline = time.monotonic() + userConfig.market_data_timeout_seconds
+    while time.monotonic() < deadline:
+        close = getattr(ticker, "close", None)
+        if close is not None and close == close and close > 0:
+            ib.cancelMktData(contract)
+            return float(close)
+        ib.sleep(1)
+    ib.cancelMktData(contract)
+    raise TimeoutError(f"Close price timed out for {contract}")
+
+
 def wait_order_accepted(ib, trade, timeout_seconds=60):
     deadline = time.monotonic() + timeout_seconds
     accepted_states = {"PreSubmitted", "Submitted", "Filled", "Cancelled", "Inactive", "ApiCancelled"}
@@ -224,7 +238,7 @@ def main():
     for symbol in sorted(target_weight):
         contract = make_stock_contract(ib, symbol, exchange=userConfig.stock_exchange, currency=userConfig.stock_currency)
         current_qty = positions.get(symbol, 0)
-        price = portfolio[symbol].marketPrice if symbol in portfolio else get_market_price(ib, contract)
+        price = get_close_price(ib, contract)
         target_value = max(net_liq_usd - userConfig.cash_buffer_usd, 0) * target_weight[symbol] / 100
         target_qty = math.floor(target_value / price)
         diff_qty = target_qty - current_qty
