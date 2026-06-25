@@ -143,6 +143,8 @@ def save_rebalance_report_image(
         f"Trade time: {trade_time}",
     ]
     for key, value in account_state.items():
+        if key == "Daily PnL":
+            continue
         summary_lines.append(f"{key}: {value}")
     summary_lines.extend(
         [
@@ -151,6 +153,8 @@ def save_rebalance_report_image(
             f"Total order value USD: {total_order_value:,.2f}",
         ]
     )
+
+    daily_pnl_line = account_state.get("Daily PnL")
 
     position_table = [
         ["Symbol", "Price", "Current Qty", "Current Value", "Current Wgt", "Target Wgt", "Target Value", "Target Qty", "Diff Qty"]
@@ -189,17 +193,20 @@ def save_rebalance_report_image(
     measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
     title_width = text_width(measure, title, title_font)
     summary_width = max(text_width(measure, line, small_font) for line in summary_lines)
+    pnl_width = text_width(measure, f"DAILY PNL: {daily_pnl_line}", title_font) if daily_pnl_line else 0
     position_widths = table_col_widths(measure, position_table, small_font, cell_pad_x)
     order_widths = table_col_widths(measure, order_table, small_font, cell_pad_x)
     position_table_width = sum(position_widths)
     order_table_width = sum(order_widths)
 
-    width = int(max(title_width, summary_width, position_table_width, order_table_width) + padding_x * 2)
+    width = int(max(title_width, summary_width, pnl_width, position_table_width, order_table_width) + padding_x * 2)
     width = max(width, 900)
 
     y = padding_y
     y += 44
     y += len(summary_lines) * line_height + section_gap
+    if daily_pnl_line:
+        y += 60 + section_gap
     y += line_height + len(position_table) * row_height + section_gap
     y += line_height + len(order_table) * row_height
     height = int(y + padding_y)
@@ -217,6 +224,17 @@ def save_rebalance_report_image(
         draw.text((padding_x, y), line, font=small_font, fill=(40, 44, 52))
         y += line_height
     y += section_gap
+
+    if daily_pnl_line:
+        pnl_text = f"DAILY PNL: {daily_pnl_line}"
+        pnl_value = daily_pnl_line
+        if pnl_value.startswith("-"):
+            pnl_color = (190, 40, 40)
+        else:
+            pnl_color = (40, 120, 40)
+        draw.rectangle([padding_x, y, width - padding_x, y + 60], fill=(248, 249, 250), outline=pnl_color, width=2)
+        draw.text((padding_x + 16, y + 14), pnl_text, font=title_font, fill=pnl_color)
+        y += 60 + section_gap
 
     draw.text((padding_x, y), "Position Plan", font=small_font, fill=(40, 44, 52))
     y += line_height
