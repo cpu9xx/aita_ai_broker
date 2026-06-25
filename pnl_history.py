@@ -53,7 +53,8 @@ def record_today(account, raw_liq, currency):
 
     nyse = mcal.get_calendar("NYSE")
     today = pd.Timestamp.now().normalize()
-    schedule = nyse.schedule(start_date=today - pd.Timedelta(days=7), end_date=today)
+    yesterday = today - pd.Timedelta(days=1)
+    schedule = nyse.schedule(start_date=yesterday - pd.Timedelta(days=7), end_date=yesterday)
     last_trading_day = schedule.index[-1].strftime("%Y-%m-%d")
 
     records = load_history(account)
