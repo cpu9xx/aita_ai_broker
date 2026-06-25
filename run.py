@@ -1,4 +1,4 @@
-"""A机/B机统一入口。sender下单→push，receiver pull→下单→push报告。"""
+"""A机/B机统一入口。sender pull→下单→push，receiver pull→下单，不push。"""
 
 import subprocess
 import sys
@@ -43,7 +43,7 @@ def main():
         print("run.py: main.py failed", flush=True)
         return 1
 
-    if not run_push():
+    if role == "sender" and not run_push():
         print("run.py: push.py failed", flush=True)
         return 1
 

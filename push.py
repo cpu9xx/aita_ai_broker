@@ -1,10 +1,8 @@
-"""Push to GitHub. Sender pushes code+JSON, receiver also pushes reports."""
+"""Push code+JSON to GitHub. Only used by sender (receiver does not push)."""
 
 import datetime as dt
 import subprocess
 from pathlib import Path
-
-import userConfig
 
 THIS_DIR = Path(__file__).resolve().parent
 
@@ -13,19 +11,11 @@ def main():
     message = f"auto: order json {dt.date.today().strftime('%Y%m%d')}"
     print(f"push.py: {message}", flush=True)
 
-    git_cmds = [["git", "add", "-A"]]
-
-    if userConfig.role == "receiver":
-        reports_dir = userConfig.report_output_dir
-        if Path(reports_dir).exists():
-            git_cmds.append(["git", "add", "-f", str(reports_dir)])
-
-    git_cmds += [
+    for cmd in (
+        ["git", "add", "-A"],
         ["git", "commit", "-m", message],
         ["git", "push"],
-    ]
-
-    for cmd in git_cmds:
+    ):
         completed = subprocess.run(cmd, cwd=str(THIS_DIR), text=True, capture_output=True)
         if completed.returncode != 0:
             if cmd[1] == "commit" and "nothing to commit" in completed.stdout:
