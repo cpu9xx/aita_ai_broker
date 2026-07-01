@@ -1,0 +1,12 @@
+{
+    "trade_date": "2026-07-01",
+    "trade_time": "21:30:00",
+    "target_weight": {
+        "UGL": 0,
+        "GLD": 0,
+        "XLK": 0,
+        "XLF": 25,
+        "SPY": 25,
+        "QQQ": 0
+    }
+}
