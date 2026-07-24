@@ -327,8 +327,8 @@ def main():
     )
     print(f"report_image: {report_image}", flush=True)
 
-    # if userConfig.send_rebalance_report:
-    #     send_rebalance_report(report_text, report_image, chart_path)
+    if userConfig.send_rebalance_report:
+        send_rebalance_report(report_text, report_image, chart_path)
 
     ib.disconnect()
 
