@@ -13,6 +13,7 @@ Today-PnL and chart are always displayed in USD.
 """
 
 import json
+import math
 from pathlib import Path
 
 import matplotlib
@@ -87,6 +88,30 @@ def _to_usd(raw_value, currency):
     return raw_value / USDHKD_FALLBACK
 
 
+def _return_stats(df, value_col):
+    values = df[value_col].astype(float)
+    daily_returns = values.pct_change().dropna()
+    total_return = values.iloc[-1] / values.iloc[0] - 1
+    elapsed_days = max((df["date"].iloc[-1] - df["date"].iloc[0]).days, 1)
+    ann_return = (1 + total_return) ** (365.25 / elapsed_days) - 1
+    ann_vol = daily_returns.std() * math.sqrt(252)
+    drawdown = values / values.cummax() - 1
+    mdd = drawdown.min()
+    sharpe = ann_return / ann_vol if ann_vol and ann_vol == ann_vol else None
+    return ann_return, ann_vol, mdd, sharpe
+
+
+def _format_stats(label, stats):
+    ann_return, ann_vol, mdd, sharpe = stats
+    sharpe_text = "n/a" if sharpe is None else f"{sharpe:.2f}"
+    return (
+        f"{label:<10} AnnRet {ann_return:>7.2%} | "
+        f"AnnVol {ann_vol:>6.2%} | "
+        f"MDD {mdd:>7.2%} | "
+        f"Sharpe {sharpe_text:>5}"
+    )
+
+
 def fetch_spx_benchmark(ib, start_date_str):
     from ib_async import Index
     contract = Index("SPX", "CBOE", "USD")
@@ -125,16 +150,19 @@ def generate_benchmark_chart(account, net_liq_usd, ib):
     spx_df = fetch_spx_benchmark(ib, df["date"].iloc[0].strftime("%Y-%m-%d"))
     fig, ax = plt.subplots(figsize=(10, 5))
 
-    ax.plot(df["date"], df["return"], color="#1f77b4", linewidth=1.8, label=account)
+    account_label = _format_stats(account, _return_stats(df, "net_liq_usd"))
+
+    ax.plot(df["date"], df["return"], color="#0072B2", linewidth=1.8, label=account_label)
     if spx_df is not None and not spx_df.empty:
         spx_initial = spx_df["close"].iloc[0]
         spx_df["return"] = (spx_df["close"] / spx_initial - 1) * 100
-        ax.plot(spx_df["date"], spx_df["return"], color="#d62728", linewidth=1.8, label="SPX")
+        spx_label = _format_stats("SPX", _return_stats(spx_df, "close"))
+        ax.plot(spx_df["date"], spx_df["return"], color="#E69F00", linewidth=1.8, label=spx_label)
 
     ax.axhline(y=0, color="black", linewidth=0.5)
     ax.set_ylabel("Cumulative Return (%)")
     ax.set_title(f"{account} vs SPX")
-    ax.legend(loc="upper left")
+    ax.legend(loc="upper left", prop={"family": "monospace", "size": 8})
     ax.grid(True, alpha=0.3)
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
     fig.autofmt_xdate()
