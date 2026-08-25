@@ -1,3 +1,4 @@
+from datetime import time
 from pathlib import Path
 
 
@@ -35,7 +36,9 @@ enable_trading = True
 stock_exchange = "SMART"
 stock_currency = "USD"
 order_type = "LOO"
-limit_price_buffer = 0.05
+daytime_limit_price_buffer = 0.03
+evening_limit_price_buffer = 0.015
+evening_order_time = time(21, 0)
 outside_rth = False
 cash_buffer_usd = 1000
 min_trade_value_usd = 100

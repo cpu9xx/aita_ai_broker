@@ -1,7 +1,9 @@
 import json
 import math
 import time
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pandas_market_calendars as mcal
@@ -85,19 +87,19 @@ def wait_order_accepted(ib, trade, timeout_seconds=60):
     return trade.orderStatus.status
 
 
-def order_price(action, reference_price):
+def order_price(action, reference_price, limit_price_buffer):
     if userConfig.order_type == "LOO":
         if action == "BUY":
-            return round(reference_price * (1 + userConfig.limit_price_buffer), 2)
-        return round(reference_price * (1 - userConfig.limit_price_buffer), 2)
+            return round(reference_price * (1 + limit_price_buffer), 2)
+        return round(reference_price * (1 - limit_price_buffer), 2)
     if userConfig.order_type == "LMT":
         return round(reference_price, 2)
     return None
 
 
-def place_order(ib, contract, action, quantity, reference_price, account, order_id_pool):
+def place_order(ib, contract, action, quantity, reference_price, limit_price_buffer, account, order_id_pool):
     order_type = userConfig.order_type.upper()
-    price = order_price(action, reference_price)
+    price = order_price(action, reference_price, limit_price_buffer)
     if order_type == "MKT":
         trade = place_market_order(ib, contract, action, quantity, account, order_id_pool, outside_rth=userConfig.outside_rth)
     elif order_type == "LMT":
@@ -120,6 +122,8 @@ def main():
     order_file, order_data = load_latest_order_file()
     account = userConfig.account
     target_weight = order_data["target_weight"]
+    run_time = datetime.now(ZoneInfo("Asia/Shanghai")).time()
+    limit_price_buffer = userConfig.daytime_limit_price_buffer if run_time < userConfig.evening_order_time else userConfig.evening_limit_price_buffer
 
     ib = IBConnectionPool(
         host=userConfig.ib_host,
@@ -142,36 +146,6 @@ def main():
     ).get_ib()
     ib.sleep(2)
     require_managed_account(ib, account)
-
-    if userConfig.cancel_existing_orders:
-        ib.reqOpenOrders()
-        ib.sleep(1)
-        open_orders = [
-            order for order in ib.openOrders()
-            if order.account == account and order.clientId == ib.client.clientId
-        ]
-        if open_orders:
-            print(f"existing_orders: canceling current client orders {len(open_orders)}", flush=True)
-            cancel_all_orders(ib)
-            deadline = time.monotonic() + userConfig.cancel_wait_seconds
-            while time.monotonic() < deadline:
-                ib.reqOpenOrders()
-                ib.sleep(1)
-                open_orders = [
-                    order for order in ib.openOrders()
-                    if order.account == account and order.clientId == ib.client.clientId
-                ]
-                if not open_orders:
-                    break
-                ib.sleep(1)
-            if open_orders:
-                active = [
-                    f"orderId={order.orderId} {order.action} {order.totalQuantity:g} {order.orderType} {getattr(order, 'tif', '')}"
-                    for order in open_orders
-                ]
-                raise TimeoutError(f"Current-client orders not cancelled within {userConfig.cancel_wait_seconds}s: {active}")
-        else:
-            print("existing_orders: none", flush=True)
 
     account_values = {}
     account_values_source = "accountSummary"
@@ -230,10 +204,11 @@ def main():
     print(f"net_liq_usd: {net_liq_usd:.2f}", flush=True)
     print(f"enable_trading: {userConfig.enable_trading}", flush=True)
     print(f"order_type: {userConfig.order_type}", flush=True)
+    print(f"run_time_cst: {run_time:%H:%M:%S}, loo_limit_price_buffer: {limit_price_buffer:.2%}", flush=True)
 
-    order_id_pool = OrderIdPool(ib)
     trades = []
     position_rows = []
+    pending_orders = []
 
     for symbol in sorted(target_weight):
         contract = make_stock_contract(ib, symbol, exchange=userConfig.stock_exchange, currency=userConfig.stock_currency)
@@ -276,20 +251,43 @@ def main():
             "symbol": symbol,
             "action": action,
             "quantity": quantity,
-            "price": order_price(action, price) or userConfig.order_type,
+            "price": order_price(action, price, limit_price_buffer) or userConfig.order_type,
             "order_value_usd": order_value,
             "status": "DRY_RUN",
         }
+        pending_orders.append((contract, action, quantity, price, trade_record))
+        trades.append(trade_record)
 
+    if userConfig.cancel_existing_orders:
+        ib.reqOpenOrders()
+        ib.sleep(1)
+        open_orders = [order for order in ib.openOrders() if order.account == account and order.clientId == ib.client.clientId]
+        if open_orders:
+            print(f"existing_orders: canceling current client orders {len(open_orders)}", flush=True)
+            cancel_all_orders(ib)
+            deadline = time.monotonic() + userConfig.cancel_wait_seconds
+            while time.monotonic() < deadline:
+                ib.reqOpenOrders()
+                ib.sleep(1)
+                open_orders = [order for order in ib.openOrders() if order.account == account and order.clientId == ib.client.clientId]
+                if not open_orders:
+                    break
+                ib.sleep(1)
+            if open_orders:
+                active = [f"orderId={order.orderId} {order.action} {order.totalQuantity:g} {order.orderType} {getattr(order, 'tif', '')}" for order in open_orders]
+                raise TimeoutError(f"Current-client orders not cancelled within {userConfig.cancel_wait_seconds}s: {active}")
+        else:
+            print("existing_orders: none", flush=True)
+
+    order_id_pool = OrderIdPool(ib)
+    for contract, action, quantity, price, trade_record in pending_orders:
         if userConfig.enable_trading:
-            trade, submitted_price = place_order(ib, contract, action, quantity, price, account, order_id_pool)
+            trade, submitted_price = place_order(ib, contract, action, quantity, price, limit_price_buffer, account, order_id_pool)
             trade_record["price"] = submitted_price
             trade_record["status"] = wait_order_accepted(ib, trade)
-            print(f"{symbol}: {action} {quantity} status={trade_record['status']}", flush=True)
+            print(f"{trade_record['symbol']}: {action} {quantity} status={trade_record['status']}", flush=True)
         else:
-            print(f"{symbol}: DRY_RUN {action} {quantity}", flush=True)
-
-        trades.append(trade_record)
+            print(f"{trade_record['symbol']}: DRY_RUN {action} {quantity}", flush=True)
 
     account_state = {"NetLiquidation USD": f"{net_liq_usd:.2f}"}
     if net_liq_hkd is not None:
