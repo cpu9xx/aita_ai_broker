@@ -25,7 +25,7 @@ def format_rebalance_report(
     lines.append("Rebalance Report")
     lines.append(f"Generated: {dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append(f"Order file: {order_file}")
-    lines.append(f"Account: {account}")
+    # lines.append(f"Account: {account}")
     lines.append(f"Trade date: {trade_date}")
     lines.append(f"Trade time: {trade_time}")
     lines.append("")
@@ -138,7 +138,7 @@ def save_rebalance_report_image(
     summary_lines = [
         f"Generated: {dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         f"Order file: {order_file}",
-        f"Account: {account}",
+        # f"Account: {account}",
         f"Trade date: {trade_date}",
         f"Trade time: {trade_time}",
     ]
@@ -299,7 +299,7 @@ def send_rebalance_report(text, image_path, chart_path=None):
 
     send_feishu(
         "Rebalance report image attached.",
-        title=f"{account} Rebalance Report",
+        title=f"Report2",
         image_paths=image_paths,
         mode="text",
     )
