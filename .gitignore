@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 pnl/
 reports/
+feishu_failures.log
 .workbuddy/
 .env
 userConfig.py

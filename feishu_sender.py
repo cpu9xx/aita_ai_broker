@@ -2,12 +2,64 @@ import json
 import os
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 
 import requests
 from PIL import Image, ImageDraw, ImageFont
 
 import userConfig
+
+
+FAILURE_LOG = Path(__file__).with_name("feishu_failures.log")
+
+
+class _FeishuRequestError(RuntimeError):
+    def __init__(self, stage, error, **receipt):
+        super().__init__(f"{stage}: {error}")
+        self.receipt = {"stage": stage, "error": error, **receipt}
+
+
+def _post_feishu(stage, url, result_path=(), **kwargs):
+    secrets = (
+        (kwargs.get("json") or {}).get("app_secret"),
+        (kwargs.get("headers") or {}).get("Authorization", "").removeprefix("Bearer "),
+        url.rsplit("/", 1)[-1] if stage == "send_webhook" else None,
+    )
+    try:
+        response = requests.post(url, **kwargs)
+    except requests.RequestException as exc:
+        detail = re.sub(r"https?://\S+", "[url]", str(exc))
+        for secret in secrets:
+            if secret:
+                detail = detail.replace(secret, "[redacted]")
+        raise _FeishuRequestError(stage, type(exc).__name__, detail=detail[:500]) from None
+
+    receipt = {
+        "http_status": response.status_code,
+        "request_id": response.headers.get("X-Tt-Logid") or response.headers.get("X-Request-Id"),
+    }
+    try:
+        payload = response.json()
+    except ValueError:
+        raise _FeishuRequestError(stage, "invalid_json", content_type=response.headers.get("Content-Type"), **receipt) from None
+    if not isinstance(payload, dict):
+        raise _FeishuRequestError(stage, "unexpected_response_type", **receipt)
+
+    result = payload
+    for key in result_path:
+        result = result.get(key) if isinstance(result, dict) else None
+    code = payload.get("code", 0 if result_path else None)
+    if response.status_code != 200 or code != 0 or (result_path and not result):
+        message = str(payload.get("msg") or payload.get("message") or "")
+        for secret in (*secrets, payload.get("tenant_access_token")):
+            if isinstance(secret, str) and secret:
+                message = message.replace(secret, "[redacted]")
+        error_info = payload.get("error")
+        if isinstance(error_info, dict) and not receipt["request_id"]:
+            receipt["request_id"] = error_info.get("log_id")
+        raise _FeishuRequestError(stage, "api_failure", feishu_code=payload.get("code"), feishu_message=message[:500], **receipt)
+    return result
 
 
 # ===============================
@@ -23,14 +75,10 @@ def strip_ansi(text):
 # =====================================================
 def _get_token():
     url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
-    r = requests.post(url, json={
+    return _post_feishu("get_token", url, ("tenant_access_token",), json={
         "app_id": userConfig.feishu_app_id,
         "app_secret": userConfig.feishu_app_secret,
     })
-    resp = r.json()
-    if r.status_code != 200 or "tenant_access_token" not in resp:
-        raise Exception(f"Token Error (Status {r.status_code}): {resp}")
-    return resp["tenant_access_token"]
 
 
 # =====================================================
@@ -193,19 +241,9 @@ def text_to_image(text, title="Feishu Message"):
 def _upload_image(token, image_path):
     url = "https://open.feishu.cn/open-apis/im/v1/images"
     headers = {"Authorization": f"Bearer {token}"}
-    files = {
-        "image_type": (None, "message"),
-        "image": (
-            os.path.basename(image_path),
-            open(image_path, "rb"),
-            "image/png",
-        ),
-    }
-    r = requests.post(url, headers=headers, files=files)
-    resp = r.json()
-    if r.status_code != 200 or "data" not in resp:
-        raise Exception(f"Upload Error (Status {r.status_code}): {resp}")
-    return resp["data"]["image_key"]
+    with open(image_path, "rb") as image_file:
+        files = {"image_type": (None, "message"), "image": (os.path.basename(image_path), image_file, "image/png")}
+        return _post_feishu("upload_image", url, ("data", "image_key"), headers=headers, files=files)
 
 
 # =====================================================
@@ -235,10 +273,7 @@ def _send_app_message(title, msg_text, image_paths):
     }
     params = {"receive_id_type": "chat_id"}
 
-    r = requests.post(url, headers=headers, params=params, json=data)
-    resp = r.json()
-    if r.status_code != 200 or resp.get("code") != 0:
-        raise Exception(f"Failed to send app message: {resp.get('msg')}")
+    _post_feishu("send_app", url, headers=headers, params=params, json=data)
     print("Feishu: message sent via App")
 
 
@@ -256,10 +291,7 @@ def _send_webhook(title, msg_text):
             "post": {"zh_cn": {"title": title, "content": content_lines}},
         },
     }
-    r = requests.post(userConfig.feishu_webhook_url, json=data)
-    resp = r.json()
-    if r.status_code != 200 or resp.get("code") != 0:
-        raise Exception(f"Failed to send webhook: {resp.get('msg')}")
+    _post_feishu("send_webhook", userConfig.feishu_webhook_url, json=data)
     print("Feishu: message sent via Webhook")
 
 
@@ -269,7 +301,7 @@ def _send_webhook(title, msg_text):
 def send_feishu(msg_text, title='Error', image_paths=None, mode='image'):
     if image_paths is None:
         image_paths = []
-    for i in range(60):
+    for attempt in range(1, 61):
         try:
             if mode == 'text':
                 clean_text = strip_ansi(msg_text)
@@ -284,7 +316,15 @@ def send_feishu(msg_text, title='Error', image_paths=None, mode='image'):
                 _send_app_message(title, "", all_images)
                 if os.path.exists(text_img_path):
                     os.remove(text_img_path)
-            break
-        except Exception as e:
-            print(f"Feishu retry {i}: {e}")
+            return True
+        except Exception as exc:
+            failure = exc.receipt if isinstance(exc, _FeishuRequestError) else {"stage": "local", "error": type(exc).__name__}
+            entry = {"time": datetime.now().astimezone().isoformat(timespec="seconds"), "title": title, "mode": mode, "attempt": attempt, **failure}
+            try:
+                with FAILURE_LOG.open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            except OSError as log_error:
+                print(f"Feishu could not write {FAILURE_LOG}: {log_error}", flush=True)
+            print(f"Feishu attempt {attempt}/60 failed: {failure}", flush=True)
             time.sleep(2)
+    return False
